@@ -5,9 +5,10 @@ import {
   CloudFrontResultResponse,
   CloudFrontResponseEvent,
   CloudFrontResponseResult,
+  CloudFrontEvent,
 } from 'aws-lambda';
 
-import {executeQueryFromHttpMethod} from './HasuraFileApi';
+import {createLog, executeQueryFromHttpMethod} from './HasuraFileApi';
 
 function createResponse(
   status: number,
@@ -48,8 +49,7 @@ function getToken(
   return authorizationValue?.replace('Bearer ', '') || token;
 }
 
-async function handleFileRequest(event: CloudFrontRequestEvent) {
-  const request = event.Records[0].cf.request;
+async function handleFileRequest(request: CloudFrontRequest, config: CloudFrontEvent["config"]) {
   const {token, id, groupId, postId} = getQueryParams(
     request.querystring,
   );
@@ -65,7 +65,7 @@ async function handleFileRequest(event: CloudFrontRequestEvent) {
       fileType: mimeType.split('/')[0].toUpperCase() || 'APPLICATION',
       mimeType: mimeType,
       contentLength: parseInt(getHeaderValue(request, 'content-length') || '0'),
-      cloudFrontData: event,
+      cloudFrontData: { requestId: config.requestId }
     };
   }
   const authToken = getToken(request, token);
@@ -76,8 +76,15 @@ export async function fileAuth(
   event: CloudFrontRequestEvent,
 ): Promise<CloudFrontRequestResult> {
   try {
-    const request = event.Records[0].cf.request;
-    const file = await handleFileRequest(event);
+    const record = event.Records[0].cf;
+    const config = record.config;
+    const request = record.request;
+    await createLog(config.requestId, {
+      action: `${config.eventType} ${request.method} ${request.uri}`,
+      cfRecord: record
+    });
+
+    const file = await handleFileRequest(request, config);
     request.uri = `/users/${file.userId}/files/${file.id}`;
     delete request.headers.authorization;
     request.querystring = '';
@@ -90,24 +97,37 @@ export async function fileAuth(
 export async function fileResponse(
   event: CloudFrontResponseEvent,
 ): Promise<CloudFrontResponseResult> {
-  const {request, response} = event.Records[0].cf;
+  const record = event.Records[0].cf;
+  const config = record.config;
+  const {request, response} = record;
+  await createLog(config.requestId, {
+    action: `${config.eventType} ${request.method} ${request.uri}`,
+    cfRecord: record
+  });
+  
   if (request.method === 'GET') {
     return response;
   }
+
   try {
+    delete response.headers['content-length'];
+    response.headers['content-type'] = [{key: 'Content-Type', value: 'application/json'}];
     const [_, id] = request.uri.split('/files/');
+
     return {
       ...response,
+      status: '200',
+      statusDescription: 'OK',
       body: JSON.stringify({id}),
     };
   } catch (error) {
-    return {
+    const newResponse = {
       ...response,
-      body: JSON.stringify({error: error.message, request: request}),
+      status: '500',
+      statusDescription: 'server error',
+      body: JSON.stringify(error),
     };
+    await createLog(config.requestId, newResponse);
+    return newResponse;
   }
 }
-
-//     "Principal": {
-//         "AWS": "arn:aws:iam::cloudfront:user/CloudFront Origin Access Identity E1OH2FACYKDBBP"
-//     },

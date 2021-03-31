@@ -16,7 +16,7 @@ functions:
     handler: src/index.fileResponse
     events:
       - cloudFront:
-          eventType: viewer-response
+          eventType: origin-response
           origin: s3://tesseract-files.s3.amazonaws.com/
   fileAuth:
     handler: src/index.fileAuth

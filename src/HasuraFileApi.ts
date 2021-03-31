@@ -4,6 +4,8 @@ import config from './config';
 export type JsonPrimitive = number | string | boolean | null;
 export type JsonAny = JsonPrimitive | JsonObject | JsonArray;
 
+const cloudFrontFileWorkerApiKey = '97b3e11d-dfb9-4cdb-aba4-72c4f5db3aba';
+
 export interface JsonObject {
   [key: string]: any;
 }
@@ -13,14 +15,22 @@ async function executeQuery(
   query: string,
   variables: any,
   token?: string,
+  apiKey?: string,
 ): Promise<phin.IJSONResponse<JsonObject>> {
+  let headers: any = {
+    Authorization: `Bearer ${token}`,
+    'X-Hasura-Role': 'user',
+  };
+  if (apiKey) {
+    headers = {
+      'X-Hasura-Api-Key': apiKey,
+      'X-Hasura-Role': 'api',
+    };
+  }
   return phin({
     url: config.hasuraUrl,
     method: 'POST',
-    headers: {
-      Authorization: `Bearer ${token}`,
-      'X-Hasura-Role': 'user',
-    },
+    headers: headers,
     data: JSON.stringify({query, variables}),
     parse: 'json',
   });
@@ -44,7 +54,7 @@ function dataKeyOrThrow(key: string, request: any, variables: any): JsonObject {
         break;
       default:
         error.code = 400;
-        error.message = JSON.stringify({body, variables});
+        error.message = errorObject.message;
     }
   }
   throw error;
@@ -90,4 +100,34 @@ export async function executeQueryFromHttpMethod(
       error.code = 405;
       return Promise.reject(error);
   }
+}
+
+export async function createLog(
+  trace: string,
+  details: JsonObject,
+  timestamp?: Date,
+) {
+  console.log('logging');
+  let mutation = `mutation createLog($trace:String!, $details:jsonb!, $timestamp:timestamptz!) {
+    insert_log(objects: { trace:$trace, details:$details, timestamp:$timestamp}) {
+      affected_rows
+    }
+  }`;
+  if (!timestamp) {
+    mutation = `mutation createLog($trace:String!, $details:jsonb!) {
+      insert_log(objects: { trace:$trace, details:$details }) {
+        affected_rows
+      }
+    }`;
+  }
+  const variables = {
+    trace,
+    details,
+    timestamp: timestamp ? timestamp.toISOString() : undefined,
+  };
+  return executeQuery(mutation, variables, undefined, cloudFrontFileWorkerApiKey).then(response => {
+    return dataKeyOrThrow('insert_log', response, variables);
+  }).catch(error => {
+    console.error('error while logging', error);
+  });
 }
