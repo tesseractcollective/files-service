@@ -1,5 +1,9 @@
 # files-service
 
+TODO:
+- [ ] make bucket name dynamic from config
+- [ ] deploy file bucket in resources
+
 Uses s3 as a storage solution, CloudFront as a gateway, and Hasura as a permissions engine to upload, download, and delete files.
 
 Upload Flow:
